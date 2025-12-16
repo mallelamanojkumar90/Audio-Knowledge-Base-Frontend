@@ -15,10 +15,27 @@ const FilesPage: React.FC = () => {
   const [files, setFiles] = useState<AudioFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>('');
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [fileToDelete, setFileToDelete] = useState<AudioFile | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string>('');
 
   useEffect(() => {
     fetchFiles();
   }, []);
+
+  // Poll for status updates when files are being transcribed
+  useEffect(() => {
+    const hasTranscribing = files.some(f => f.status === 'transcribing');
+    
+    if (hasTranscribing) {
+      const interval = setInterval(() => {
+        fetchFiles();
+      }, 5000); // Poll every 5 seconds
+
+      return () => clearInterval(interval);
+    }
+  }, [files]);
 
   const fetchFiles = async () => {
     try {
@@ -36,6 +53,66 @@ const FilesPage: React.FC = () => {
       console.error('Error fetching files:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteClick = (file: AudioFile) => {
+    setFileToDelete(file);
+    setDeleteModalOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!fileToDelete) return;
+
+    try {
+      setDeleting(true);
+      const response = await fetch(`http://localhost:3001/api/files/${fileToDelete.id}`, {
+        method: 'DELETE',
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSuccessMessage(`File "${fileToDelete.original_filename}" deleted successfully`);
+        setFiles(files.filter(f => f.id !== fileToDelete.id));
+        setTimeout(() => setSuccessMessage(''), 3000);
+      } else {
+        setError(data.error?.message || 'Failed to delete file');
+      }
+    } catch (err) {
+      setError('Failed to delete file');
+      console.error('Error deleting file:', err);
+    } finally {
+      setDeleting(false);
+      setDeleteModalOpen(false);
+      setFileToDelete(null);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setDeleteModalOpen(false);
+    setFileToDelete(null);
+  };
+
+  const handleRetryTranscription = async (fileId: number) => {
+    try {
+      const response = await fetch(`http://localhost:3001/api/transcripts/generate/${fileId}`, {
+        method: 'POST',
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setSuccessMessage('Transcription started successfully');
+        // Refresh the file list to show updated status
+        fetchFiles();
+        setTimeout(() => setSuccessMessage(''), 3000);
+      } else {
+        setError(data.error?.message || 'Failed to start transcription');
+      }
+    } catch (err) {
+      setError('Failed to start transcription');
+      console.error('Error starting transcription:', err);
     }
   };
 
@@ -106,6 +183,26 @@ const FilesPage: React.FC = () => {
           Upload New File
         </Link>
       </div>
+
+      {/* Success Message */}
+      {successMessage && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+          <div className="flex items-center">
+            <svg
+              className="w-5 h-5 text-green-500 mr-2"
+              fill="currentColor"
+              viewBox="0 0 20 20"
+            >
+              <path
+                fillRule="evenodd"
+                d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                clipRule="evenodd"
+              />
+            </svg>
+            <p className="text-sm font-medium text-green-800">{successMessage}</p>
+          </div>
+        </div>
+      )}
 
       {files.length === 0 ? (
         <div className="bg-white rounded-lg shadow p-12 text-center">
@@ -191,11 +288,140 @@ const FilesPage: React.FC = () => {
                     >
                       View Transcript
                     </Link>
+                    {(file.status === 'failed' || file.status === 'uploaded') && (
+                      <button
+                        onClick={() => handleRetryTranscription(file.id)}
+                        className="text-green-600 hover:text-green-900 inline-flex items-center mr-4"
+                        title="Retry transcription"
+                      >
+                        <svg
+                          className="w-4 h-4 mr-1"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                          />
+                        </svg>
+                        Retry
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleDeleteClick(file)}
+                      className="text-red-600 hover:text-red-900 inline-flex items-center"
+                    >
+                      <svg
+                        className="w-4 h-4 mr-1"
+                        fill="currentColor"
+                        viewBox="0 0 20 20"
+                      >
+                        <path
+                          fillRule="evenodd"
+                          d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                      Delete
+                    </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteModalOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <div className="flex items-center mb-4">
+                <div className="flex-shrink-0 w-12 h-12 rounded-full bg-red-100 flex items-center justify-center">
+                  <svg
+                    className="w-6 h-6 text-red-600"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                    />
+                  </svg>
+                </div>
+                <div className="ml-4">
+                  <h3 className="text-lg font-medium text-gray-900">Delete File</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    Are you sure you want to delete this file?
+                  </p>
+                </div>
+              </div>
+
+              {fileToDelete && (
+                <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm font-medium text-gray-900">
+                    {fileToDelete.original_filename}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {formatFileSize(fileToDelete.file_size)} • {formatDate(fileToDelete.created_at)}
+                  </p>
+                </div>
+              )}
+
+              <p className="text-sm text-gray-600 mb-6">
+                This action cannot be undone. The file and all associated data will be permanently deleted.
+              </p>
+
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={handleDeleteCancel}
+                  disabled={deleting}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleDeleteConfirm}
+                  disabled={deleting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center"
+                >
+                  {deleting ? (
+                    <>
+                      <svg
+                        className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                        />
+                      </svg>
+                      Deleting...
+                    </>
+                  ) : (
+                    'Delete File'
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>
